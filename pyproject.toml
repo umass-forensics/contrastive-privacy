@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contrastive-privacy"
+version = "0.1.0"
+description = "Image privacy tools using generative AI models"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "fal-client>=0.5.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "diffusers>=0.25.0",
+    "transformers>=4.35.0",
+    "einops>=0.7.0",
+    "accelerate>=0.25.0",
+    "Pillow>=10.0.0",
+    "sentencepiece>=0.1.99",
+    "protobuf>=4.25.0",
+    "openai>=1.0.0",
+    "scipy>=1.10.0",
+    "gliner2>=1.2.0",
+    "sentence-transformers>=2.2.0",
+    # Optional 4-bit/8-bit embedder loading (--embedder-quantization); CUDA wheels on Linux.
+    "bitsandbytes>=0.41.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+flux-generate = "contrastive_privacy.scripts.generate_image:main"
+flux-edit = "contrastive_privacy.scripts.edit_image:main"
+flux-inpaint = "contrastive_privacy.scripts.inpaint_image:main"
+flux-create-mask = "contrastive_privacy.scripts.create_mask:main"
+flux-anonymize = "contrastive_privacy.scripts.anonymize:main"
+compare-images = "contrastive_privacy.scripts.compare_images:main"
+recognize-objects = "contrastive_privacy.scripts.recognize_objects:main"
+resolution-analysis = "contrastive_privacy.scripts.resolution_analysis:main"
+similarity-analysis = "contrastive_privacy.scripts.similarity_analysis:main"
+concept-resolution = "contrastive_privacy.scripts.concept_resolution:main"
+identify-obfuscation-concepts = "contrastive_privacy.scripts.identify_obfuscation_concepts:main"
+reanalyze-image-resolution = "contrastive_privacy.scripts.reanalyze_image_resolution:main"
+reanalyze_image_resolution = "contrastive_privacy.scripts.reanalyze_image_resolution:main"
+reanalyze-text-resolution = "contrastive_privacy.scripts.reanalyze_text_resolution:main"
+reanalyze_text_resolution = "contrastive_privacy.scripts.reanalyze_text_resolution:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
