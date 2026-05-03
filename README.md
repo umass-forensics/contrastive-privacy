@@ -14,10 +14,17 @@ The current workflow is centered on:
 
 ### Requirements
 
+What works locally without external services:
+
 - Python 3.9 or newer.
-- A CUDA GPU is strongly recommended for local image and embedding models.
-- A Hugging Face account/token for models that require authentication or license acceptance.
-- A fal.ai API key for the experiment commands that use `--segmenter ai-gen`, `--segmenter vlm-bounding-box`, or text `--approach concept`.
+- CPU is enough for small `clipseg` image runs and small text entity runs.
+- A CUDA GPU is strongly recommended for larger local image and embedding workloads.
+
+What may require authentication or API keys:
+
+- A Hugging Face account/token for gated or licensed model downloads such as `sam3`.
+- A fal.ai API key for `--segmenter ai-gen`, `--segmenter vlm-bounding-box`, `identify-obfuscation-concepts`, or text `--approach concept`.
+- Some older single-image OpenAI editing paths use `OPENAI_API_KEY`, but the main experiment workflow does not depend on it.
 
 ### Install
 
@@ -41,7 +48,7 @@ If you change `[project.scripts]` in `pyproject.toml`, rerun `pip install -e .` 
 If you use Hugging Face gated models, log in before the first run:
 
 ```bash
-huggingface-cli login
+hf auth login
 ```
 
 Set your fal.ai key when using cloud image editing, OpenRouter vision, or concept-based text redaction:
@@ -71,11 +78,87 @@ The image experiment commands require the corresponding image folders under `dat
 
 Generated analysis runs are expected to live outside the tracked source tree, typically under `runs/`. The repo now ignores that directory so local experiment outputs, HTML reports, cached JSON bundles, and generated media do not show up as unstaged changes.
 
+## What Needs What
+
+### Local-Only Paths
+
+These do not require `FAL_KEY` and can be run entirely locally once dependencies are installed:
+
+- Image runs with `--segmenter clipseg`.
+- Image runs with `--segmenter groundedsam`, assuming the local model weights are available.
+- Text runs with `--approach entity`.
+- Report generation with `results-webpage` and `open-results-webpage`.
+
+### Hugging Face Access Needed
+
+- `--segmenter sam3` is local at inference time, but the `facebook/sam3` weights are gated on Hugging Face.
+- Some other model backends may also require Hugging Face authentication or license acceptance before first download.
+
+### API Keys Needed
+
+- `FAL_KEY`: required for `ai-gen`, `vlm-bounding-box`, `identify-obfuscation-concepts`, and text `--approach concept`.
+- `OPENAI_API_KEY`: only needed for the older OpenAI-specific single-image utilities, not for the default local workflow.
+
+## Simple Local Run
+
+The smallest no-external-service image path is a `clipseg` run with explicit objects:
+
+```bash
+resolution-analysis data/dicaprio \
+  --mode blackout \
+  --trials 1 \
+  --samples 2 \
+  --segmenter clipseg \
+  --objects face person \
+  --output runs/dicaprio_clipseg_local_cp0 \
+  --seed 1 \
+  --min-coverage 0.00001 \
+  --max-coverage 1.0 \
+  --threshold 0.2 \
+  --blur 5 \
+  --dilate 5 \
+  --embedder-model openai/clip-vit-base-patch32 \
+  --embed-batch-size 2 \
+  --device cpu \
+  --skip-comparisons
+```
+
+After that run completes, generate the local HTML report with:
+
+```bash
+results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
+open-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
+```
+
 ## Core Commands
 
 ### Image Resolution Analysis
 
-Use `resolution-analysis` to obfuscate image datasets and evaluate effective resolution:
+Use `resolution-analysis` to obfuscate image datasets and evaluate effective resolution.
+
+Local-only example:
+
+```bash
+resolution-analysis data/dicaprio \
+  --mode blackout \
+  --trials 1 \
+  --samples 2 \
+  --segmenter clipseg \
+  --objects face person \
+  --output runs/dicaprio_clipseg_local_cp0 \
+  --seed 1 \
+  --min-coverage 0.00001 \
+  --max-coverage 1.0 \
+  --threshold 0.2 \
+  --blur 5 \
+  --dilate 5 \
+  --embedder-model openai/clip-vit-base-patch32 \
+  --embed-batch-size 2 \
+  --device cpu \
+  --skip-comparisons
+```
+
+API-backed example from the experiment catalog:
 
 ```bash
 resolution-analysis data/dicaprio \
@@ -113,6 +196,13 @@ Important flags:
 - `--retry`: retry skipped references from a previous `report.txt` using the saved `params.json`.
 - `--skip-comparisons`: skip compound comparison images while still computing metrics. Some commands in `experiments.sh` use `--skip-comparison`; argparse accepts that as an abbreviation, but new commands should use the plural spelling.
 
+Segmenter notes:
+
+- `clipseg`: easiest local path for a first run.
+- `groundedsam`: local path with stronger object grounding, but heavier than `clipseg`.
+- `sam3`: local inference path, but requires gated Hugging Face access before first download.
+- `ai-gen` and `vlm-bounding-box`: external-service paths that require `FAL_KEY`.
+
 ### Image Concept Identification
 
 Use `identify-obfuscation-concepts` to ask a fal.ai OpenRouter vision model which visible concepts should be removed to protect a high-level privacy target:
@@ -138,7 +228,25 @@ This command requires `FAL_KEY`.
 
 ### Text Resolution Analysis
 
-There is no installed console script for text resolution analysis in `pyproject.toml`, so run it as a module:
+There is no installed console script for text resolution analysis in `pyproject.toml`, so run it as a module.
+
+Local-only example:
+
+```bash
+python -m contrastive_privacy.scripts.text_resolution_analysis data/avengers_small \
+  --mode blackout \
+  --trials 2 \
+  --samples 3 \
+  --approach entity \
+  --entities movie person organization \
+  --output runs/avengers_entity_local_cp0 \
+  --embedder sbert \
+  --embedder-model sentence-transformers/all-MiniLM-L6-v2 \
+  --device cpu \
+  --embed-batch-size 2
+```
+
+API-backed concept example:
 
 ```bash
 python -m contrastive_privacy.scripts.text_resolution_analysis data/avengers_small \
@@ -225,8 +333,8 @@ Useful flags:
 Recommended local review loop:
 
 ```bash
-results-webpage runs/dicaprio_simple_cp0 --skip-similarity
-open-results-webpage runs/dicaprio_simple_cp0 --skip-similarity
+results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
+open-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
 ```
 
 Use `--skip-similarity` when you only want to inspect an existing run and do not need to recompute original-vs-obfuscated utility metrics.
@@ -401,9 +509,10 @@ Use `--continue` after a partial run to reuse already-created obfuscations. Use 
 
 - `command not found`: activate the environment and run `pip install -e .` again.
 - Missing `FAL_KEY`: required for `ai-gen`, `vlm-bounding-box`, and text `--approach concept`.
+- `sam3` access errors: run `hf auth login` and ensure your account has access to `facebook/sam3`.
 - Missing image data: the image commands in `experiments.sh` expect `data/dicaprio`, `data/mcdonalds_large`, and `data/mcdonalds_small`.
 - CUDA out of memory: reduce `--embed-batch-size`, use `--embedder-quantization half`, use smaller samples, or run on CPU for smaller text experiments.
-- Model download/auth errors: run `huggingface-cli login` and accept any required model licenses on Hugging Face.
+- Model download/auth errors: run `hf auth login` and accept any required model licenses on Hugging Face.
 
 ## License
 
