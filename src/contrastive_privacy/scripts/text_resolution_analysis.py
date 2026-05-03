@@ -54,6 +54,7 @@ from contrastive_privacy.scripts.compare_texts import (
     EVA_CLIP_TEXT_EMBEDDER_EXAMPLE,
     DEFAULT_QWEN_EMBEDDER_MODEL,
 )
+from contrastive_privacy.reporting import generate_analysis_artifacts
 
 
 # Supported text file extensions (tuple: stable iteration order across processes)
@@ -98,6 +99,7 @@ _PARAMS_REPORT_KEYS = (
     "continue_from_output",
     "obfuscate_missing_in_continue",
     "generate_comparisons",
+    "write_analysis_artifacts",
     "retry_skipped_paths_count",
     "timestamp",
     "command_line",
@@ -777,6 +779,7 @@ def run_text_resolution_analysis(
     retry_skipped_paths: Optional[list[Path]] = None,
     obfuscate_missing_in_continue: bool = True,
     generate_comparisons: bool = True,
+    write_analysis_artifacts: bool = True,
     command_line: Optional[str] = None,
 ) -> None:
     """
@@ -816,6 +819,8 @@ def run_text_resolution_analysis(
             existing obfuscated file instead of running primary obfuscation.
         generate_comparisons: If False, skip writing per-pair comparison files while still computing
             resolution and results.csv.
+        write_analysis_artifacts: If True, automatically write analysis_report.html and
+            analysis_report.json after the run completes.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -934,6 +939,7 @@ def run_text_resolution_analysis(
         "continue_from_output": continue_from_output,
         "obfuscate_missing_in_continue": obfuscate_missing_in_continue,
         "generate_comparisons": generate_comparisons,
+        "write_analysis_artifacts": write_analysis_artifacts,
         "retry_skipped_paths_count": len(retry_skipped_paths) if retry_skipped_paths else 0,
         "timestamp": datetime.now().isoformat(),
         "command_line": command_line,
@@ -1435,6 +1441,26 @@ def run_text_resolution_analysis(
         f.write("\n".join(report_lines) + "\n")
     
     print(f"\nReport saved to: {report_file}")
+    if write_analysis_artifacts:
+        try:
+            artifacts = generate_analysis_artifacts(
+                output_folder,
+                title=f"Contrastive Privacy Analysis: {output_folder.name}",
+                threshold=0.0,
+                top_n=6,
+                compute_similarity=True,
+                device=device,
+                batch_size=embed_batch_size,
+                text_embedder=embedder_type,
+                text_embedder_model=embedder_model,
+                text_embedder_quantization=embedder_quantization,
+                text_folder=text_folder,
+                refresh=True,
+            )
+            print(f"Analysis page saved to: {artifacts['html_path']}")
+            print(f"Analysis bundle saved to: {artifacts['json_path']}")
+        except Exception as exc:
+            print(f"WARNING: Failed to generate analysis artifacts: {exc}")
 
 
 def main() -> None:
@@ -1595,6 +1621,12 @@ Resolution interpretation:
         "--retry",
         action="store_true",
         help="Retry obfuscation for skipped reference texts listed in report.txt. Uses parameters from params.json in the output folder; command-line arguments override. Requires --output to point to a previous run.",
+    )
+    parser.add_argument(
+        "--skip-analysis-artifacts",
+        dest="write_analysis_artifacts",
+        action="store_false",
+        help="Do not auto-generate analysis_report.html and analysis_report.json at the end of the run.",
     )
     parser.add_argument(
         "--samples", "-s",
@@ -1900,6 +1932,11 @@ Resolution interpretation:
             params.get("embed_batch_size", 8),
             ["--embed-batch-size"],
         )
+        write_analysis_artifacts = _use(
+            args.write_analysis_artifacts,
+            params.get("write_analysis_artifacts", True),
+            ["--skip-analysis-artifacts"],
+        )
 
         if not text_folder.exists():
             parser.error(f"Text folder not found: {text_folder}")
@@ -1958,6 +1995,7 @@ Resolution interpretation:
             continue_from_output=True,
             retry_skipped_paths=skipped_paths,
             command_line=shlex.join(sys.argv),
+            write_analysis_artifacts=write_analysis_artifacts,
         )
         return
 
@@ -2038,6 +2076,7 @@ Resolution interpretation:
         instances=args.instances,
         continue_from_output=args.continue_from_output,
         command_line=shlex.join(sys.argv),
+        write_analysis_artifacts=args.write_analysis_artifacts,
     )
 
 

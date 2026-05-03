@@ -66,6 +66,8 @@ reanalyze-image-resolution = "contrastive_privacy.scripts.reanalyze_image_resolu
 reanalyze_image_resolution = "contrastive_privacy.scripts.reanalyze_image_resolution:main"
 reanalyze-text-resolution = "contrastive_privacy.scripts.reanalyze_text_resolution:main"
 reanalyze_text_resolution = "contrastive_privacy.scripts.reanalyze_text_resolution:main"
+results-webpage = "contrastive_privacy.scripts.generate_results_webpage:main"
+open-results-webpage = "contrastive_privacy.scripts.open_results_webpage:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

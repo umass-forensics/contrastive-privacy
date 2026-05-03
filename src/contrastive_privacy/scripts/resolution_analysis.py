@@ -51,6 +51,7 @@ from contrastive_privacy.scripts.compare_images import (
     load_clip_model,
     similarity_from_embeddings,
 )
+from contrastive_privacy.reporting import generate_analysis_artifacts
 
 
 # Supported image extensions
@@ -673,6 +674,7 @@ def run_resolution_analysis(
     embedder_model: str = DEFAULT_EMBEDDER_MODEL,
     embed_batch_size: int = 8,
     verbose: bool = False,
+    write_analysis_artifacts: bool = True,
 ) -> None:
     """
     Run resolution analysis on a folder of images.
@@ -840,6 +842,7 @@ def run_resolution_analysis(
         "embedder_model": embedder_model,
         "embed_batch_size": embed_batch_size,
         "verbose": verbose,
+        "write_analysis_artifacts": write_analysis_artifacts,
         "timestamp": datetime.now().isoformat(),
     }
     with open(params_file, "w") as f:
@@ -1495,6 +1498,24 @@ def run_resolution_analysis(
         f.write("\n".join(report_lines) + "\n")
     
     print(f"\nReport saved to: {report_file}")
+    if write_analysis_artifacts:
+        try:
+            artifacts = generate_analysis_artifacts(
+                output_folder,
+                title=f"Contrastive Privacy Analysis: {output_folder.name}",
+                threshold=0.0,
+                top_n=6,
+                compute_similarity=True,
+                device=device,
+                batch_size=embed_batch_size,
+                image_model=embedder_model,
+                image_folder=image_folder,
+                refresh=True,
+            )
+            print(f"Analysis page saved to: {artifacts['html_path']}")
+            print(f"Analysis bundle saved to: {artifacts['json_path']}")
+        except Exception as exc:
+            print(f"WARNING: Failed to generate analysis artifacts: {exc}")
 
 
 def main() -> None:
@@ -1854,6 +1875,12 @@ Resolution interpretation:
         help="Write detailed per-comparison values to report.txt (resolution with d1 and d2).",
     )
     parser.add_argument(
+        "--skip-analysis-artifacts",
+        dest="write_analysis_artifacts",
+        action="store_false",
+        help="Do not auto-generate analysis_report.html and analysis_report.json at the end of the run.",
+    )
+    parser.add_argument(
         "--embed-batch-size",
         type=int,
         default=8,
@@ -1949,6 +1976,11 @@ Resolution interpretation:
             args.verbose,
             params.get("verbose", False),
             ["--verbose"],
+        )
+        write_analysis_artifacts = _use(
+            args.write_analysis_artifacts,
+            params.get("write_analysis_artifacts", True),
+            ["--skip-analysis-artifacts"],
         )
 
         if not image_folder.exists():
@@ -2046,6 +2078,7 @@ Resolution interpretation:
             embedder_model=embedder_model,
             embed_batch_size=embed_batch_size,
             verbose=verbose,
+            write_analysis_artifacts=write_analysis_artifacts,
         )
         return
 
@@ -2171,6 +2204,7 @@ Resolution interpretation:
         embedder_model=args.embedder_model,
         embed_batch_size=args.embed_batch_size,
         verbose=args.verbose,
+        write_analysis_artifacts=args.write_analysis_artifacts,
     )
 
 

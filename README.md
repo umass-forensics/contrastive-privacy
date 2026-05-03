@@ -7,6 +7,7 @@ The current workflow is centered on:
 - `resolution-analysis` for image datasets.
 - `python -m contrastive_privacy.scripts.text_resolution_analysis` for text datasets.
 - `similarity-analysis` for post-run original-vs-obfuscated similarity histograms.
+- `results-webpage` for a filterable HTML report plus a cached JSON analysis bundle.
 - `experiments.sh` as a command catalog for the paper-style image and text experiments.
 
 ## Setup
@@ -26,7 +27,16 @@ conda activate priv
 pip install -e .
 ```
 
+For this repo, the validated local environment in this workspace has been `cp0`. If you already have that environment, the equivalent install path is:
+
+```bash
+conda activate cp0
+pip install -e .
+```
+
 `pip install -e .` uses `pyproject.toml` and installs the console scripts listed there. Prefer it over `requirements.txt`, which is older and does not list every current dependency.
+
+If you change `[project.scripts]` in `pyproject.toml`, rerun `pip install -e .` so new console commands are registered in the active environment.
 
 If you use Hugging Face gated models, log in before the first run:
 
@@ -58,6 +68,8 @@ data/
 Text files can use `.txt`, `.md`, `.text`, `.csv`, or `.json`. Image files can use `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.gif`, or `.tiff`.
 
 The image experiment commands require the corresponding image folders under `data/`, and the text experiment commands use the `avengers_*` folders.
+
+Generated analysis runs are expected to live outside the tracked source tree, typically under `runs/`. The repo now ignores that directory so local experiment outputs, HTML reports, cached JSON bundles, and generated media do not show up as unstaged changes.
 
 ## Core Commands
 
@@ -183,6 +195,45 @@ similarity-analysis avg_small_gpt-5.4_t3 \
 `similarity-analysis` auto-detects image vs. text outputs from `obfuscated/`. For image outputs, `--model` selects the CLIP image embedder. For text outputs, use `--embedder` and `--embedder-model`, or omit them and let the script reuse the settings saved in `params.json`. Some text follow-up commands in `experiments.sh` pass `--model Qwen/Qwen3-Embedding-8B`; that flag is image-only in the current CLI, so the text embedder still comes from `params.json` unless you pass `--embedder-model`.
 
 Use `--image-folder` or `--text-folder` if the original data has moved since the resolution run.
+
+### HTML Report Generation
+
+Image and text resolution runs now auto-generate two extra files in the output folder unless you pass `--skip-analysis-artifacts`:
+
+- `analysis_report.html`: a static webpage with summary metrics, histograms, a searchable/sortable all-pairs table, and example pairs with explanations.
+- `analysis_report.json`: a cached structured bundle for notebooks, dashboards, or downstream plotting without recomputing similarity.
+
+You can also regenerate or customize the report later with `results-webpage`:
+
+```bash
+results-webpage dicaprio_large/gpt-image-1.5_remove_t3
+results-webpage avg_small_gpt-5.4_t3 --title "Avengers Text Run"
+results-webpage some_output_folder --refresh --threshold 0.02 --top-n 8
+results-webpage some_output_folder --low-utility-threshold 0.25 --high-utility-threshold 0.8 --open
+open-results-webpage some_output_folder
+```
+
+Useful flags:
+
+- `--refresh`: ignore any cached `analysis_report.json` and recompute the bundle.
+- `--skip-similarity`: render the report from resolution results only, without recomputing original-vs-obfuscated similarity.
+- `--low-utility-threshold` and `--high-utility-threshold`: control the utility bands shown in the report and the low-utility example filter.
+- `--json-output` and `--output`: override the default JSON/HTML output paths.
+- `--open`: open the generated report immediately in your default browser.
+- `--image-folder` or `--text-folder`: resolve original files from a different location if the dataset moved.
+
+Recommended local review loop:
+
+```bash
+results-webpage runs/dicaprio_simple_cp0 --skip-similarity
+open-results-webpage runs/dicaprio_simple_cp0 --skip-similarity
+```
+
+Use `--skip-similarity` when you only want to inspect an existing run and do not need to recompute original-vs-obfuscated utility metrics.
+
+If you usually want the report opened after generation, `open-results-webpage` is a thin wrapper around `results-webpage` with browser opening enabled by default. Pass `--no-open` when you only want the artifacts refreshed.
+
+For interactive inspection, see the notebook at `notebooks/inspect_results.ipynb`, which reuses the same JSON/HTML artifact pipeline.
 
 ## Understanding `experiments.sh`
 
