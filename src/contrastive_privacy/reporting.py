@@ -360,6 +360,23 @@ def _load_results_rows(results_csv: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _unordered_pair_key(row: dict[str, Any]) -> tuple[str, str]:
+    return tuple(sorted((str(row.get("u", "")), str(row.get("v", "")))))
+
+
+def _unique_unordered_pairs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the first directed row encountered for each unordered image/text pair."""
+    seen: set[tuple[str, str]] = set()
+    unique_rows: list[dict[str, Any]] = []
+    for row in rows:
+        key = _unordered_pair_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(row)
+    return unique_rows
+
+
 def load_run_report(
     output_folder: str | Path,
     *,
@@ -448,30 +465,34 @@ def load_run_report(
 
     sorted_rows = sorted(rows, key=lambda row: float(row["resolution"]))
     all_examples = [enrich(row) for row in sorted_rows]
-    worst_examples = [
-        enrich(row)
-        for row in sorted(rows, key=lambda row: float(row["resolution"]), reverse=True)[:top_n]
-    ]
-    borderline_examples = [
-        enrich(row)
-        for row in sorted(rows, key=lambda row: abs(float(row["resolution"]) - threshold))[:top_n]
-    ]
-    strongest_examples = [enrich(row) for row in sorted_rows[:top_n]]
-    leak_examples = [
-        enrich(row)
-        for row in sorted(
+    worst_rows = _unique_unordered_pairs(
+        sorted(rows, key=lambda row: float(row["resolution"]), reverse=True)
+    )
+    borderline_rows = _unique_unordered_pairs(
+        sorted(rows, key=lambda row: abs(float(row["resolution"]) - threshold))
+    )
+    strongest_rows = _unique_unordered_pairs(
+        [row for row in sorted_rows if float(row["resolution"]) < threshold]
+    )
+    leak_rows = _unique_unordered_pairs(
+        sorted(
             [row for row in rows if float(row["resolution"]) > threshold],
             key=lambda row: float(row["resolution"]),
             reverse=True,
-        )[:top_n]
-    ]
-    low_utility_examples = [
-        enrich(row)
-        for row in sorted(
+        )
+    )
+    low_utility_rows = _unique_unordered_pairs(
+        sorted(
             [row for row in rows if similarity_by_original.get(row["u"], 1.0) < low_utility_threshold],
             key=lambda row: similarity_by_original.get(row["u"], 1.0),
-        )[:top_n]
-    ]
+        )
+    )
+
+    worst_examples = [enrich(row) for row in worst_rows[:top_n]]
+    borderline_examples = [enrich(row) for row in borderline_rows[:top_n]]
+    strongest_examples = [enrich(row) for row in strongest_rows[:top_n]]
+    leak_examples = [enrich(row) for row in leak_rows[:top_n]]
+    low_utility_examples = [enrich(row) for row in low_utility_rows[:top_n]]
 
     resolution_summary = {
         **_summarize_values(resolutions),
@@ -745,10 +766,10 @@ def _render_examples_table(bundle: dict[str, Any]) -> str:
 
 def _render_image_example(example: dict[str, Any], output_html: Path, threshold: float) -> str:
     paths = [
-        ("Reference original", example["u_path"]),
-        ("Reference obfuscated", example["u_obfuscated_path"]),
-        ("Peer original", example["v_path"]),
-        ("Peer obfuscated", example["v_obfuscated_path"]),
+        (f"X_c(x): {_format_path_label(example['u_path'])}", example["u_obfuscated_path"]),
+        (f"y: {_format_path_label(example['v_path'])}", example["v_path"]),
+        (f"X_c(x): {_format_path_label(example['u_path'])}", example["u_obfuscated_path"]),
+        (f"X_c(y): {_format_path_label(example['v_path'])}", example["v_obfuscated_path"]),
     ]
     tiles: list[str] = []
     for label, path in paths:
@@ -815,7 +836,8 @@ def render_html_report(
     params = bundle["params"]
     summary = bundle["resolution_summary"]
     similarity_summary = bundle["similarity_summary"]
-    report_title = title or f"Contrastive Privacy Analysis: {output_folder.name}"
+    report_title = title or "Contrastive Privacy Analysis"
+    run_name = output_folder.name
     threshold = float(summary["threshold"])
 
     example_renderer = _render_image_example if bundle["content_type"] == "image" else _render_text_example
@@ -917,11 +939,19 @@ def render_html_report(
       margin-bottom: 12px;
     }}
     h1, h2, h3 {{ font-family: 'Fraunces', serif; line-height: 1.1; margin: 0; }}
-    h1 {{ font-size: clamp(2.2rem, 4vw, 4rem); max-width: 12ch; margin-bottom: 14px; }}
+    h1 {{ font-size: clamp(2.2rem, 4vw, 4rem); max-width: 12ch; margin-bottom: 10px; }}
     h2 {{ font-size: 1.65rem; margin-bottom: 16px; }}
     h3 {{ font-size: 1.2rem; margin-bottom: 6px; }}
     p {{ line-height: 1.6; margin: 0 0 14px; }}
     .muted {{ color: var(--muted); }}
+    .run-name {{
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: clamp(0.92rem, 1.7vw, 1.15rem);
+      line-height: 1.35;
+      margin-bottom: 16px;
+      overflow-wrap: anywhere;
+    }}
     .hero-grid {{ display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px; align-items: start; }}
     .hero-copy {{ max-width: 60ch; }}
     .hero-meta {{ display: grid; gap: 14px; }}
@@ -953,7 +983,7 @@ def render_html_report(
             padding: 12px 14px;
             font: inherit;
         }}
-        .table-wrap {{ overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-strong); }}
+        .table-wrap {{ overflow: auto; max-height: min(640px, 70vh); border: 1px solid var(--line); border-radius: 18px; background: var(--panel-strong); }}
         .examples-table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
         .examples-table th, .examples-table td {{ padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; }}
         .examples-table th {{ font-size: 0.84rem; color: var(--muted); background: #f8f4ee; position: sticky; top: 0; }}
@@ -983,7 +1013,7 @@ def render_html_report(
     .score-pill.bad {{ background: var(--bad-soft); color: var(--bad); }}
     .image-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
     .image-tile, .text-tile {{ margin: 0; background: #f8f4ee; border-radius: 18px; border: 1px solid var(--line); overflow: hidden; }}
-    .image-tile img {{ width: 100%; height: 260px; object-fit: cover; display: block; background: #ebe2d5; }}
+    .image-tile img {{ width: 100%; height: 260px; object-fit: contain; display: block; background: #ebe2d5; }}
     figcaption, .tile-label {{ padding: 10px 12px; font-size: 0.84rem; color: var(--muted); border-top: 1px solid var(--line); }}
     .missing {{ min-height: 260px; display: grid; place-items: center; color: var(--muted); }}
     .text-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
@@ -1004,6 +1034,7 @@ def render_html_report(
         <div class=\"hero-copy\">
           <div class=\"eyebrow\">Contrastive privacy run review</div>
           <h1>{html.escape(report_title)}</h1>
+          <div class=\"run-name\">{html.escape(run_name)}</div>
           <p>{html.escape(_overview_text(bundle))}</p>
           <p class=\"muted\">Output folder: {html.escape(str(output_folder))}</p>
         </div>
