@@ -123,12 +123,13 @@ resolution-analysis data/dicaprio \
   --skip-comparisons
 ```
 
-After that run completes, generate the local HTML report with:
+After that run completes, open the local HTML report with:
 
 ```bash
-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
 open-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
 ```
+
+The `--skip-similarity` flag is optional here. It keeps the local review loop fast by rendering from the resolution results only, without recomputing original-vs-obfuscated utility metrics.
 
 ## Core Commands
 
@@ -333,11 +334,10 @@ Useful flags:
 Recommended local review loop:
 
 ```bash
-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
 open-results-webpage runs/dicaprio_clipseg_local_cp0 --skip-similarity
 ```
 
-Use `--skip-similarity` when you only want to inspect an existing run and do not need to recompute original-vs-obfuscated utility metrics.
+Use `--skip-similarity` when you only want to inspect an existing run and do not need to recompute original-vs-obfuscated utility metrics. Omit it when you want the report to include the similarity summary, low-utility examples, and utility bands based on fresh original-vs-obfuscated embeddings.
 
 If you usually want the report opened after generation, `open-results-webpage` is a thin wrapper around `results-webpage` with browser opening enabled by default. Pass `--no-open` when you only want the artifacts refreshed.
 
