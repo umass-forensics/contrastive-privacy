@@ -10,6 +10,22 @@ The current workflow is centered on:
 - `results-webpage` for a filterable HTML report plus a cached JSON analysis bundle.
 - `experiments.sh` as a command catalog for the paper-style image and text experiments.
 
+## Paper
+
+- arXiv page: https://arxiv.org/abs/2605.02977
+- PDF: https://arxiv.org/pdf/2605.02977.pdf
+
+If you use this repository, please cite:
+
+```bibtex
+@article{bissias2026contrastive,
+  title   = {Contrastive Privacy: A Semantic Approach to Measuring Privacy of AI-based Sanitization},
+  author  = {Bissias, George and Bagdasarian, Eugene and Levine, Brian Neil},
+  journal = {arXiv preprint arXiv:2605.02977},
+  year    = {2026}
+}
+```
+
 ## Setup
 
 ### Requirements
