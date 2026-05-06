@@ -12,7 +12,6 @@ The current workflow is centered on:
 
 ## Paper
 
-- arXiv page: https://arxiv.org/abs/2605.02977
 - PDF: https://arxiv.org/pdf/2605.02977.pdf
 
 If you use this repository, please cite:
