@@ -41,9 +41,16 @@
   }
   h1 {
     font-size: 2.4rem;
-    font-weight: 800;
+    font-weight: 700;
     margin: 0 0 14px;
     letter-spacing: -0.025em;
+  }
+  .title-highlight {
+    color: var(--accent);
+    font-weight: 900;
+    /* background: linear-gradient(transparent 62%, rgba(176, 58, 46, 0.16) 62%); */
+    padding: 0 8px;
+    border-radius: 2px;
   }
   h2 {
     font-size: 1.45rem;
@@ -238,6 +245,11 @@
   }
   .copy-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 
+  .logo {
+    height: 50px;
+    margin-top: 12px;
+  }
+
   footer {
     margin-top: 64px;
     padding-top: 22px;
@@ -254,14 +266,17 @@
 
 <!-- HERO -->
 <section class="hero">
-  <div class="venue">arXiv preprint &middot; 2026</div>
-  <h1>Contrastive Privacy: A Semantic Approach to Measuring Privacy of AI-based Sanitization</h1>
+  <!-- <div class="venue">arXiv preprint &middot; 2026</div> -->
+   <a href="https://www.cics.umass.edu/" target="_blank" rel="noopener">
+    <img src="umass.png" alt="UMass Logo" class="logo">
+  </a>
+  <h1><span class="title-highlight">Contrastive Privacy</span><br>A Semantic Approach to Measuring<br>Privacy of AI-based Sanitization</h1>
   <div class="authors">
-    <a href="mailto:gbiss@cs.umass.edu">George Bissias</a>
+    <a href="https://people.cs.umass.edu/~gbiss/" target="_blank" rel="noopener">George Bissias</a>
     <span class="sep">&middot;</span>
-    <a href="mailto:eugene@cs.umass.edu">Eugene Bagdasarian</a>
+    <a href="https://people.cs.umass.edu/~eugene/" target="_blank" rel="noopener">Eugene Bagdasarian</a>
     <span class="sep">&middot;</span>
-    <a href="mailto:brian@cs.umass.edu">Brian Neil Levine</a>
+    <a href="https://people.cs.umass.edu/~brian/" target="_blank" rel="noopener">Brian Neil Levine</a>
   </div>
   <div class="affil">University of Massachusetts Amherst</div>
 
@@ -309,10 +324,10 @@
     <text x="615" y="210" text-anchor="middle" font-weight="600">sanitized B</text>
 
     <line x1="170" y1="215" x2="550" y2="215" stroke="#2f7a4d" stroke-width="2" marker-end="url(#arr)"/>
-    <text x="360" y="207" text-anchor="middle" fill="#2f7a4d" font-weight="600" font-size="13">should be the shorter distance</text>
+    <text x="380" y="207" text-anchor="middle" fill="#2f7a4d" font-weight="600" font-size="13">should be the shorter distance</text>
 
-    <line x1="170" y1="230" x2="550" y2="65" stroke="#b03a2e" stroke-width="2" marker-end="url(#arr)"/>
-    <text x="445" y="160" text-anchor="middle" fill="#b03a2e" font-weight="600" font-size="13">should be longer</text>
+    <line x1="170" y1="215" x2="615" y2="100" stroke="#b03a2e" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="360" y="150" text-anchor="middle" fill="#b03a2e" font-weight="600" font-size="13" transform="rotate(-14 380 130)">should be longer distance</text>
 
     <line x1="105" y1="100" x2="105" y2="180" stroke="#767c85" stroke-width="1.5" marker-end="url(#arr)"/>
     <text x="115" y="146" fill="#767c85" font-size="11">sanitize</text>
