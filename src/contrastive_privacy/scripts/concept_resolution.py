@@ -11,9 +11,9 @@ v is from folder F2 (exhibiting concept c2), the script computes:
     - d2 = 1 - similarity(u, X(v))     Distance from u to obfuscated v (v obfuscated for c2)
     - d3 = 1 - similarity(X(u), v)     Distance from obfuscated u to v (u obfuscated for c1)
 
-The script reports the distributions of:
-    - d2 - d1: How obfuscating c2 in F2 images affects their distance from F1 images
-    - d3 - d1: How obfuscating c1 in F1 images affects their distance to F2 images
+For each pair, resolution = min(d2 - d1, d3 - d1): the smaller increase in distance
+from obfuscating either concept. The script reports the distribution of resolution across
+all pairs.
 
 Example:
     concept-resolution --folder1 ./faces --folder2 ./bodies \\
@@ -40,6 +40,7 @@ from typing import Optional
 
 import torch
 from PIL import Image
+from torchvision.transforms import functional as TF
 
 from contrastive_privacy.scripts.anonymize import (
     CLIPSegModels,
@@ -61,6 +62,7 @@ from contrastive_privacy.scripts.compare_texts import (
     load_text_embedder,
 )
 from contrastive_privacy.scripts.recognize_entities import GLiNER2Recognizer, load_recognizer
+from contrastive_privacy.scripts.resolution_analysis import create_compound_image
 from contrastive_privacy.scripts.text_anonymize import anonymize_text
 
 
@@ -80,6 +82,41 @@ DEFAULT_MIN_COVERAGE = 0.001  # 0.1%
 
 # Default maximum coverage threshold (as a fraction, not percentage)
 DEFAULT_MAX_COVERAGE = 1.0  # 100% (no limit by default)
+
+# Per-channel delta (0–255) above which a pixel counts as changed vs the original
+DEFAULT_OBFUSCATED_PIXEL_DIFF_THRESHOLD = 4
+
+# Upper bound on changed-pixel %% for analysis (100 = no limit)
+DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT = 100.0
+
+
+def fraction_pixels_differing_from_original(
+    original_path: Path,
+    obfuscated_path: Path,
+    *,
+    rgb_diff_threshold: int = DEFAULT_OBFUSCATED_PIXEL_DIFF_THRESHOLD,
+) -> float:
+    """
+    Fraction of pixel positions where the obfuscated image differs from the original.
+
+    A pixel counts as changed if any RGB channel differs by more than
+    ``rgb_diff_threshold`` (to ignore minor re-encoding noise). If spatial sizes
+    differ, the obfuscated image is resized to match the original before comparison.
+
+    Returns:
+        Value in [0.0, 1.0].
+    """
+    orig_pil = Image.open(original_path).convert("RGB")
+    w, h = orig_pil.size
+    orig = TF.to_tensor(orig_pil)
+    obf_pil = Image.open(obfuscated_path).convert("RGB")
+    if obf_pil.size != (w, h):
+        obf_pil = obf_pil.resize((w, h), Image.Resampling.BILINEAR)
+    obf = TF.to_tensor(obf_pil)
+    thr = rgb_diff_threshold / 255.0
+    delta = (orig - obf).abs()
+    changed = delta.max(dim=0).values > thr
+    return float(changed.float().mean().item())
 
 
 def get_image_files(folder: Path) -> list[Path]:
@@ -275,6 +312,121 @@ def create_summary_grid(
     return output_path
 
 
+def _resolution_str_for_filename(res: float) -> str:
+    """Filename-safe encoding of a resolution value (matches resolution_analysis)."""
+    return f"{res:.4f}".replace("-", "n").replace(".", "p")
+
+
+def _path_dict_key(mapping: dict[Path, Path], path: Path) -> Path:
+    """Return the key in ``mapping`` that refers to the same file as ``path``."""
+    if path in mapping:
+        return path
+    target = path.resolve()
+    for key in mapping:
+        if key.resolve() == target:
+            return key
+    raise KeyError(path)
+
+
+def _compound_paths_for_resolution(
+    row: dict,
+    *,
+    obfuscated1: dict[Path, Path],
+    obfuscated2: dict[Path, Path],
+) -> tuple[Path, Path, Path]:
+    """
+    Paths for create_compound_image when resolution = min(d2 - d1, d3 - d1).
+
+    Uses obfuscation of v when d2 - d1 <= d3 - d1, else obfuscation of u.
+    """
+    u = _path_dict_key(obfuscated1, row["u"])
+    v = _path_dict_key(obfuscated2, row["v"])
+    if row["d2_minus_d1"] <= row["d3_minus_d1"]:
+        return u, v, obfuscated2[v]
+    return v, u, obfuscated1[u]
+
+
+def _write_concept_resolution_comparison_tails(
+    *,
+    image_pair_rows: list[dict],
+    obfuscated1: dict[Path, Path],
+    obfuscated2: dict[Path, Path],
+    out_dir: Path,
+    n_tails: int,
+) -> list[str]:
+    """
+    Write 2x2 compound images (same layout as resolution_analysis) for the lowest and
+    highest tail of resolution = min(d2 - d1, d3 - d1).
+    """
+    lines: list[str] = []
+    if not image_pair_rows or n_tails < 1:
+        return lines
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n = min(n_tails, len(image_pair_rows))
+    written: dict[tuple[str, str], str] = {}
+
+    def _emit_comparison_for_row(
+        *,
+        row: dict,
+        slot_prefix: str,
+        rank: int,
+    ) -> str:
+        u = row["u"]
+        v = row["v"]
+        key = (str(u.resolve()), str(v.resolve()))
+        if key in written:
+            return written[key]
+        res_str = _resolution_str_for_filename(float(row["resolution"]))
+        fname = f"cmp_{slot_prefix}_{rank:02d}_res{res_str}.jpg"
+        out_path = out_dir / fname
+        xu_path, v_path, xv_path = _compound_paths_for_resolution(
+            row, obfuscated1=obfuscated1, obfuscated2=obfuscated2
+        )
+        create_compound_image(
+            xu_path=xu_path,
+            v_path=v_path,
+            xv_path=xv_path,
+            output_path=out_path,
+        )
+        written[key] = fname
+        return fname
+
+    by_resolution = sorted(image_pair_rows, key=lambda r: r["resolution"])
+    low = by_resolution[:n]
+    high = sorted(by_resolution[-n:], key=lambda r: r["resolution"], reverse=True)
+
+    lines.append(
+        f"Comparison images: n_tails={n_tails} (up to {n} lowest and {n} highest). "
+        f"Same 2x2 layout as resolution-analysis create_compound_image."
+    )
+    lines.append(f"  Folder: {out_dir}")
+    lines.append(
+        "  Grid: upper-left = reference, upper-right = target original, "
+        "lower-left = same as upper-left, lower-right = obfuscated target "
+        "(obfuscates v when d2 - d1 <= d3 - d1, else u)."
+    )
+    lines.append("  Resolution metric: min(d2 - d1, d3 - d1)")
+    lines.append(f"  Lowest {len(low)} values of resolution:")
+    for i, row in enumerate(low):
+        fname = _emit_comparison_for_row(row=row, slot_prefix="low", rank=i)
+        lines.append(
+            f"    resolution={row['resolution']:+.6f}  "
+            f"d2-d1={row['d2_minus_d1']:+.6f}  d3-d1={row['d3_minus_d1']:+.6f}  "
+            f"u={row['u'].name}  v={row['v'].name}  {out_dir.name}/{fname}"
+        )
+    lines.append(f"  Highest {len(high)} values of resolution:")
+    for i, row in enumerate(high):
+        fname = _emit_comparison_for_row(row=row, slot_prefix="high", rank=i)
+        lines.append(
+            f"    resolution={row['resolution']:+.6f}  "
+            f"d2-d1={row['d2_minus_d1']:+.6f}  d3-d1={row['d3_minus_d1']:+.6f}  "
+            f"u={row['u'].name}  v={row['v'].name}  {out_dir.name}/{fname}"
+        )
+    lines.append("")
+    return lines
+
+
 def format_cumulative_distribution(
     values: list[float],
     num_bins: int = 20,
@@ -394,6 +546,10 @@ def run_concept_resolution_analysis(
     skip_empty_labels: bool = False,
     refinements: int = 0,
     num_bins: int = 20,
+    min_obfuscated_pixel_change_pct: float = 0.0,
+    max_obfuscated_pixel_change_pct: float = DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT,
+    generate_comparison_images: bool = False,
+    comparison_n_tails: int = 5,
     embedder_model: str = DEFAULT_EMBEDDER_MODEL,
     text_embedder_type: str = "clip",
     text_embedder_quantization: Optional[str] = None,
@@ -407,7 +563,7 @@ def run_concept_resolution_analysis(
         - d2 = 1 - similarity(u, X(v))  (v obfuscated for concept2)
         - d3 = 1 - similarity(X(u), v)  (u obfuscated for concept1)
     
-    Reports distributions of d3-d1 and d3-d2.
+    Reports the distribution of resolution = min(d2 - d1, d3 - d1) across all pairs.
     
     Args:
         input1: Folder of images OR file of text sentences exhibiting concept1.
@@ -439,6 +595,18 @@ def run_concept_resolution_analysis(
         convex_hull: If True, expand each object's mask to its convex hull.
         skip_empty_labels: If True, skip obfuscation of objects with empty labels.
         refinements: Number of refinement passes for GPT-5.2 polygon detection.
+        min_obfuscated_pixel_change_pct: Image mode only. If greater than 0, exclude an
+            obfuscated image from pairwise analysis when fewer than this percentage of
+            pixels differ from the original (any RGB channel delta above a small
+            tolerance). 0 disables this filter.
+        max_obfuscated_pixel_change_pct: Image mode only. Exclude when more than this
+            percentage of pixels differ from the original (same counting as min). Use
+            ``100`` (default) for no upper limit.
+        generate_comparison_images: Image mode only. If True, write 2x2 comparison images
+            for the lowest and highest ``comparison_n_tails`` values of min(d2 - d1, d3 - d1)
+            (see report section).
+        comparison_n_tails: Number of pairs to take from each tail when generating
+            comparison images (default 5). Ignored when ``generate_comparison_images`` is False.
         embedder_model: For image mode: HuggingFace CLIP / EvaCLIP for image embeddings
             (same as ``compare-images --model``). For text mode: model ID for the loader chosen by
             ``text_embedder_type`` (CLIP text tower, Qwen3 embedding, or SBERT).
@@ -520,6 +688,15 @@ def run_concept_resolution_analysis(
             print(f"Text embedder quantization: {text_quant_display}")
         print(f"Text embed batch size: {embed_batch_size}")
     print(f"Input mode: {mode_name}")
+    if is_image_mode and (
+        min_obfuscated_pixel_change_pct > 0
+        or max_obfuscated_pixel_change_pct < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+    ):
+        print(
+            f"Obfuscated pixel change bounds: "
+            f"{min_obfuscated_pixel_change_pct:.2f}%–{max_obfuscated_pixel_change_pct:.2f}% "
+            f"(per-channel diff > {DEFAULT_OBFUSCATED_PIXEL_DIFF_THRESHOLD})"
+        )
     
     # Sample images if requested
     if samples1 is not None:
@@ -586,6 +763,10 @@ def run_concept_resolution_analysis(
         "convex_hull": convex_hull,
         "skip_empty_labels": skip_empty_labels,
         "refinements": refinements,
+        "min_obfuscated_pixel_change_pct": min_obfuscated_pixel_change_pct,
+        "max_obfuscated_pixel_change_pct": max_obfuscated_pixel_change_pct,
+        "generate_comparison_images": generate_comparison_images,
+        "comparison_n_tails": comparison_n_tails,
         "embedder_model": embedder_model if is_image_mode else resolved_text_embedder_model,
         "timestamp": datetime.now().isoformat(),
     }
@@ -605,6 +786,12 @@ def run_concept_resolution_analysis(
     print(f"  Obfuscated folder1: {obfuscated_f1_folder}")
     print(f"  Obfuscated folder2: {obfuscated_f2_folder}")
     
+    if is_image_mode and generate_comparison_images:
+        print(
+            f"Comparison images: enabled (n-tails={comparison_n_tails}) -> "
+            f"{output_folder / 'comparisons'}"
+        )
+
     # Pre-load models for efficiency
     print("\n" + "=" * 60)
     print("Loading models")
@@ -648,6 +835,8 @@ def run_concept_resolution_analysis(
         )
 
     print("All models loaded successfully!")
+
+    comparison_image_report_lines: list[str] = []
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
@@ -708,6 +897,37 @@ def run_concept_resolution_analysis(
                         print(f"    WARNING: Coverage too low ({coverage_fraction:.4f})")
                     elif coverage_fraction > max_coverage:
                         print(f"    WARNING: Coverage too high ({coverage_fraction:.4f})")
+                    elif (
+                        min_obfuscated_pixel_change_pct > 0
+                        or max_obfuscated_pixel_change_pct
+                        < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+                    ):
+                        pct_changed = (
+                            fraction_pixels_differing_from_original(img_path, obf_path) * 100.0
+                        )
+                        if (
+                            min_obfuscated_pixel_change_pct > 0
+                            and pct_changed < min_obfuscated_pixel_change_pct
+                        ):
+                            print(
+                                f"    WARNING: Too few pixels differ from original "
+                                f"({pct_changed:.2f}% < {min_obfuscated_pixel_change_pct:.2f}%)"
+                            )
+                        elif (
+                            max_obfuscated_pixel_change_pct
+                            < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+                            and pct_changed > max_obfuscated_pixel_change_pct
+                        ):
+                            print(
+                                f"    WARNING: Too many pixels differ from original "
+                                f"({pct_changed:.2f}% > {max_obfuscated_pixel_change_pct:.2f}%)"
+                            )
+                        else:
+                            valid1.add(img_path)
+                            print(
+                                f"    OK (coverage={coverage_fraction:.4f}, "
+                                f"pixel_change={pct_changed:.2f}%)"
+                            )
                     else:
                         valid1.add(img_path)
                         print(f"    OK (coverage={coverage_fraction:.4f})")
@@ -755,6 +975,37 @@ def run_concept_resolution_analysis(
                         print(f"    WARNING: Coverage too low ({coverage_fraction:.4f})")
                     elif coverage_fraction > max_coverage:
                         print(f"    WARNING: Coverage too high ({coverage_fraction:.4f})")
+                    elif (
+                        min_obfuscated_pixel_change_pct > 0
+                        or max_obfuscated_pixel_change_pct
+                        < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+                    ):
+                        pct_changed = (
+                            fraction_pixels_differing_from_original(img_path, obf_path) * 100.0
+                        )
+                        if (
+                            min_obfuscated_pixel_change_pct > 0
+                            and pct_changed < min_obfuscated_pixel_change_pct
+                        ):
+                            print(
+                                f"    WARNING: Too few pixels differ from original "
+                                f"({pct_changed:.2f}% < {min_obfuscated_pixel_change_pct:.2f}%)"
+                            )
+                        elif (
+                            max_obfuscated_pixel_change_pct
+                            < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+                            and pct_changed > max_obfuscated_pixel_change_pct
+                        ):
+                            print(
+                                f"    WARNING: Too many pixels differ from original "
+                                f"({pct_changed:.2f}% > {max_obfuscated_pixel_change_pct:.2f}%)"
+                            )
+                        else:
+                            valid2.add(img_path)
+                            print(
+                                f"    OK (coverage={coverage_fraction:.4f}, "
+                                f"pixel_change={pct_changed:.2f}%)"
+                            )
                     else:
                         valid2.add(img_path)
                         print(f"    OK (coverage={coverage_fraction:.4f})")
@@ -929,8 +1180,7 @@ def run_concept_resolution_analysis(
         print("=" * 60)
         
         results = []
-        d2_minus_d1_values: list[float] = []
-        d3_minus_d1_values: list[float] = []
+        resolution_values: list[float] = []
         
         if is_image_mode:
             valid_rows_left = sorted(valid1)
@@ -975,12 +1225,10 @@ def run_concept_resolution_analysis(
                 d2 = 1 - sim_u_xv      # d2 = 1 - similarity(u, X(v))
                 d3 = 1 - sim_xu_v      # d3 = 1 - similarity(X(u), v)
                 
-                # Compute delta values
                 d2_minus_d1 = d2 - d1
                 d3_minus_d1 = d3 - d1
-                
-                d2_minus_d1_values.append(d2_minus_d1)
-                d3_minus_d1_values.append(d3_minus_d1)
+                resolution = min(d2_minus_d1, d3_minus_d1)
+                resolution_values.append(resolution)
                 
                 results.append({
                     "u": u_id,
@@ -990,6 +1238,7 @@ def run_concept_resolution_analysis(
                     "d3": d3,
                     "d2_minus_d1": d2_minus_d1,
                     "d3_minus_d1": d3_minus_d1,
+                    "resolution": resolution,
                 })
                 
                 pair_count += 1
@@ -997,6 +1246,30 @@ def run_concept_resolution_analysis(
                     print(f"  Processed {pair_count}/{total_valid_pairs} pairs...")
         
         print(f"  Completed {pair_count} pairs")
+
+        if is_image_mode and generate_comparison_images and comparison_n_tails >= 1 and results:
+            print("\n" + "=" * 60)
+            print("Step 3b: Writing comparison images (n-tails)")
+            print("=" * 60)
+            image_pair_rows = [
+                {
+                    "u": Path(r["u"]),
+                    "v": Path(r["v"]),
+                    "d2_minus_d1": r["d2_minus_d1"],
+                    "d3_minus_d1": r["d3_minus_d1"],
+                    "resolution": r["resolution"],
+                }
+                for r in results
+            ]
+            cmp_lines = _write_concept_resolution_comparison_tails(
+                image_pair_rows=image_pair_rows,
+                obfuscated1=obfuscated1,
+                obfuscated2=obfuscated2,
+                out_dir=output_folder / "comparisons",
+                n_tails=comparison_n_tails,
+            )
+            comparison_image_report_lines.extend(cmp_lines)
+            print(f"  Wrote comparison images under {output_folder / 'comparisons'}")
     
     # Clean up models
     print("\n" + "=" * 60)
@@ -1024,7 +1297,7 @@ def run_concept_resolution_analysis(
     print("Step 4: Writing results to CSV")
     print("=" * 60)
     
-    fieldnames = ["u", "v", "d1", "d2", "d3", "d2_minus_d1", "d3_minus_d1"]
+    fieldnames = ["u", "v", "d1", "d2", "d3", "d2_minus_d1", "d3_minus_d1", "resolution"]
     with open(output_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -1070,6 +1343,20 @@ def run_concept_resolution_analysis(
         report(f"  Redact blur radius: {redact_blur_radius}")
     elif mode == "replace":
         report(f"  Replacement prompt: {replacement_prompt}")
+    if is_image_mode and (
+        min_obfuscated_pixel_change_pct > 0
+        or max_obfuscated_pixel_change_pct < DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT
+    ):
+        report(
+            f"  Obfuscated pixel change bounds: {min_obfuscated_pixel_change_pct:.2f}%–"
+            f"{max_obfuscated_pixel_change_pct:.2f}% vs original (per-channel diff > "
+            f"{DEFAULT_OBFUSCATED_PIXEL_DIFF_THRESHOLD})"
+        )
+    if is_image_mode and generate_comparison_images:
+        report(
+            f"  Comparison images: enabled, n-tails={comparison_n_tails} "
+            f"(resolution-analysis 2x2 layout; folder comparisons/)"
+        )
     report(f"  Seed: {seed}")
     report()
     report("Summary:")
@@ -1093,6 +1380,8 @@ def run_concept_resolution_analysis(
         report(f"    - summary_obfuscated_f1.jpg")
         report(f"    - summary_originals_f2.jpg")
         report(f"    - summary_obfuscated_f2.jpg")
+    if is_image_mode and generate_comparison_images:
+        report(f"  comparisons/ (min(d2 - d1, d3 - d1) tails)")
     report()
     report("=" * 60)
     report("Distance Definitions")
@@ -1106,32 +1395,35 @@ def run_concept_resolution_analysis(
     report("  X(v) = v obfuscated for concept2")
     report()
     
-    # Print histograms
+    report(
+        "  resolution = min(d2 - d1, d3 - d1)  Smaller distance increase from obfuscating either concept"
+    )
+    report()
+    
+    # Print histogram
     report("=" * 60)
-    report("Distribution of d2 - d1")
+    report("Distribution of resolution = min(d2 - d1, d3 - d1)")
     report("=" * 60)
     report()
-    report("Interpretation: Measures how obfuscating concept2 in folder2 images")
-    report("affects their distance from folder1 images.")
+    report("Interpretation: For each pair, the smaller change in distance from obfuscating")
+    report("concept2 in v (d2 - d1) or concept1 in u (d3 - d1).")
     report("  Positive: Obfuscation increases distance (images become more different)")
     report("  Negative: Obfuscation decreases distance (images become more similar)")
     report()
-    for line in format_cumulative_distribution(d2_minus_d1_values, num_bins=num_bins, title="d2 - d1"):
+    for line in format_cumulative_distribution(
+        resolution_values, num_bins=num_bins, title="min(d2 - d1, d3 - d1)"
+    ):
         report(line)
     
-    report()
-    report("=" * 60)
-    report("Distribution of d3 - d1")
-    report("=" * 60)
-    report()
-    report("Interpretation: Measures how obfuscating concept1 in folder1 images")
-    report("affects their distance to folder2 images.")
-    report("  Positive: Obfuscation increases distance (images become more different)")
-    report("  Negative: Obfuscation decreases distance (images become more similar)")
-    report()
-    for line in format_cumulative_distribution(d3_minus_d1_values, num_bins=num_bins, title="d3 - d1"):
-        report(line)
-    
+    if comparison_image_report_lines:
+        report()
+        report("=" * 60)
+        report("Comparison images (n-tails)")
+        report("=" * 60)
+        report()
+        for line in comparison_image_report_lines:
+            report(line)
+
     report()
     report("=" * 60)
     report(f"To reproduce this run, use: --seed {seed}")
@@ -1180,10 +1472,17 @@ def regenerate_concept_resolution_report(output_folder: Path, num_bins: int = 20
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             raise ValueError("results.csv has no header row")
-        required_cols = {"d2_minus_d1", "d3_minus_d1"}
-        if not required_cols.issubset(set(reader.fieldnames)):
+        fieldnames = set(reader.fieldnames)
+        if "resolution" in fieldnames:
+            resolution_source = "resolution"
+        elif {"d2_minus_d1", "d3_minus_d1"}.issubset(fieldnames):
+            resolution_source = "deltas"
+        elif {"d1", "d2", "d3"}.issubset(fieldnames):
+            resolution_source = "distances"
+        else:
             raise ValueError(
-                f"results.csv must contain columns {sorted(required_cols)}; got {list(reader.fieldnames)}"
+                "results.csv must contain resolution, or d2_minus_d1 and d3_minus_d1, "
+                f"or d1/d2/d3; got {list(reader.fieldnames)}"
             )
         for row in reader:
             rows.append(row)
@@ -1191,11 +1490,17 @@ def regenerate_concept_resolution_report(output_folder: Path, num_bins: int = 20
     if not rows:
         raise ValueError("results.csv contains no data rows")
 
-    d2_minus_d1_values: list[float] = []
-    d3_minus_d1_values: list[float] = []
+    resolution_values: list[float] = []
     for row in rows:
-        d2_minus_d1_values.append(float(row["d2_minus_d1"]))
-        d3_minus_d1_values.append(float(row["d3_minus_d1"]))
+        if resolution_source == "resolution":
+            resolution_values.append(float(row["resolution"]))
+        elif resolution_source == "deltas":
+            resolution_values.append(
+                min(float(row["d2_minus_d1"]), float(row["d3_minus_d1"]))
+            )
+        else:
+            d1, d2, d3 = float(row["d1"]), float(row["d2"]), float(row["d3"])
+            resolution_values.append(min(d2 - d1, d3 - d1))
 
     unique_u = {row["u"].strip() for row in rows if row.get("u", "").strip()}
     unique_v = {row["v"].strip() for row in rows if row.get("v", "").strip()}
@@ -1319,32 +1624,21 @@ def regenerate_concept_resolution_report(output_folder: Path, num_bins: int = 20
     report("  X(u) = u obfuscated for concept1")
     report("  X(v) = v obfuscated for concept2")
     report()
+    report(
+        "  resolution = min(d2 - d1, d3 - d1)  Smaller distance increase from obfuscating either concept"
+    )
+    report()
     report("=" * 60)
-    report("Distribution of d2 - d1")
+    report("Distribution of resolution = min(d2 - d1, d3 - d1)")
     report("=" * 60)
     report()
-    report("Interpretation: Measures how obfuscating concept2 in folder2 images")
-    report("affects their distance from folder1 images.")
+    report("Interpretation: For each pair, the smaller change in distance from obfuscating")
+    report("concept2 in v (d2 - d1) or concept1 in u (d3 - d1).")
     report("  Positive: Obfuscation increases distance (images become more different)")
     report("  Negative: Obfuscation decreases distance (images become more similar)")
     report()
     for line in format_cumulative_distribution(
-        d2_minus_d1_values, num_bins=num_bins, title="d2 - d1"
-    ):
-        report(line)
-
-    report()
-    report("=" * 60)
-    report("Distribution of d3 - d1")
-    report("=" * 60)
-    report()
-    report("Interpretation: Measures how obfuscating concept1 in folder1 images")
-    report("affects their distance to folder2 images.")
-    report("  Positive: Obfuscation increases distance (images become more different)")
-    report("  Negative: Obfuscation decreases distance (images become more similar)")
-    report()
-    for line in format_cumulative_distribution(
-        d3_minus_d1_values, num_bins=num_bins, title="d3 - d1"
+        resolution_values, num_bins=num_bins, title="min(d2 - d1, d3 - d1)"
     ):
         report(line)
 
@@ -1399,11 +1693,8 @@ Distance definitions:
   d2 = 1 - similarity(u, X(v))     Distance from u to obfuscated v
   d3 = 1 - similarity(X(u), v)     Distance from obfuscated u to v
 
-Output distributions:
-  d2 - d1: How obfuscating concept2 in folder2 images affects their
-           distance from folder1 images
-  d3 - d1: How obfuscating concept1 in folder1 images affects their
-           distance to folder2 images
+Output distribution:
+  resolution = min(d2 - d1, d3 - d1): Smaller distance change from obfuscating either concept
 
 Output folder structure:
   The --output folder will contain:
@@ -1416,6 +1707,7 @@ Output folder structure:
     - summary_obfuscated_f1.jpg: Grid of obfuscated images from folder1
     - summary_originals_f2.jpg: Grid of original images from folder2
     - summary_obfuscated_f2.jpg: Grid of obfuscated images from folder2
+    - comparisons/: (optional, --comparison-images) 2x2 tails for min(d2 - d1, d3 - d1)
         """,
     )
     
@@ -1493,6 +1785,50 @@ Output folder structure:
         type=float,
         default=DEFAULT_MAX_COVERAGE,
         help=f"Maximum mask coverage fraction (default: {DEFAULT_MAX_COVERAGE}).",
+    )
+    parser.add_argument(
+        "--min-obfuscated-pixel-change-pct",
+        type=float,
+        default=0.0,
+        metavar="PCT",
+        help=(
+            "Image mode only. Exclude obfuscated images from pairwise analysis when fewer "
+            "than PCT%% of pixels differ from the original (any RGB channel delta above a "
+            f"small tolerance, default {DEFAULT_OBFUSCATED_PIXEL_DIFF_THRESHOLD}). "
+            "0 disables (default). Useful when segmentation mask coverage is misleading."
+        ),
+    )
+    parser.add_argument(
+        "--max-obfuscated-pixel-change-pct",
+        type=float,
+        default=DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT,
+        metavar="PCT",
+        help=(
+            "Image mode only. Exclude obfuscated images from pairwise analysis when more "
+            "than PCT%% of pixels differ from the original (same rule as "
+            "--min-obfuscated-pixel-change-pct). "
+            f"{DEFAULT_MAX_OBFUSCATED_PIXEL_CHANGE_PCT} disables the upper bound (default)."
+        ),
+    )
+    parser.add_argument(
+        "--comparison-images",
+        action="store_true",
+        help=(
+            "Image mode only: write 2x2 compound images (same layout as resolution-analysis) "
+            "for the N lowest and N highest min(d2 - d1, d3 - d1) values (folder comparisons/). "
+            "N is set by --comparison-n-tails."
+        ),
+    )
+    parser.add_argument(
+        "--comparison-n-tails",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "With --comparison-images: number of pair comparisons per tail "
+            "(lowest N and highest N min(d2 - d1, d3 - d1); default 5). Must be >= 1 when "
+            "--comparison-images is used."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -1709,7 +2045,12 @@ Output folder structure:
                     f"--embedder-quantization {_eq} cannot be used with --device cpu. "
                     "Omit --device or use --device cuda."
                 )
-    
+
+    if args.comparison_images and folder1.is_file():
+        parser.error("--comparison-images requires directory inputs (image mode)")
+    if args.comparison_images and args.comparison_n_tails < 1:
+        parser.error("--comparison-n-tails must be at least 1 when using --comparison-images")
+
     if args.samples1 is not None and args.samples1 < 1:
         parser.error("--samples1 must be at least 1")
     if args.samples2 is not None and args.samples2 < 1:
@@ -1721,6 +2062,15 @@ Output folder structure:
         parser.error("--max-coverage must be between 0.0 and 1.0")
     if args.min_coverage > args.max_coverage:
         parser.error("--min-coverage cannot be greater than --max-coverage")
+    if not (0.0 <= args.min_obfuscated_pixel_change_pct <= 100.0):
+        parser.error("--min-obfuscated-pixel-change-pct must be between 0.0 and 100.0")
+    if not (0.0 <= args.max_obfuscated_pixel_change_pct <= 100.0):
+        parser.error("--max-obfuscated-pixel-change-pct must be between 0.0 and 100.0")
+    if args.min_obfuscated_pixel_change_pct > args.max_obfuscated_pixel_change_pct:
+        parser.error(
+            "--min-obfuscated-pixel-change-pct cannot be greater than "
+            "--max-obfuscated-pixel-change-pct"
+        )
     
     if args.mode == "replace" and not args.replace_prompt:
         parser.error("--replace-prompt is required when using --mode replace")
@@ -1744,6 +2094,10 @@ Output folder structure:
         samples2=args.samples2,
         min_coverage=args.min_coverage,
         max_coverage=args.max_coverage,
+        min_obfuscated_pixel_change_pct=args.min_obfuscated_pixel_change_pct,
+        max_obfuscated_pixel_change_pct=args.max_obfuscated_pixel_change_pct,
+        generate_comparison_images=args.comparison_images,
+        comparison_n_tails=args.comparison_n_tails,
         replacement_prompt=replacement_prompt,
         seed=args.seed,
         device=args.device,
