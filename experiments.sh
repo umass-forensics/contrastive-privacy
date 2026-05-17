@@ -569,3 +569,25 @@ similarity-analysis avg_large_haiku-4.5_t3 --model Qwen/Qwen3-Embedding-8B
 python -m contrastive_privacy.scripts.text_resolution_analysis data/avengers_large --mode blackout --min-coverage 0.00001 --max-coverage 1.0 --trials 48 --samples 49 --sequential-labels --output avg_large_haiku-3.5_t3 --approach concept --concept 'anything that can identify the movie discussed in this passage' --concept-model anthropic/claude-3.5-haiku --embedder qwen --embedder-model Qwen/Qwen3-Embedding-8B --embedder-quantization none --device cuda --embed-batch-size 1
 
 similarity-analysis avg_large_haiku-3.5_t3 --model Qwen/Qwen3-Embedding-8B
+
+#----- resolution analysis -----
+
+#----- images
+
+concept-resolution --folder1 data/paperclips --folder2 data/desks --concept1 paperclip --concept2 desk --mode redact --embedder-model BAAI/EVA-CLIP-18B --output paperclips_vs_desks --comparison-images --comparison-n-tails 3 --blur 5 --dilate 25 --mode blackout --bins 100
+
+concept-resolution --folder1 data/cars --folder2 data/boats --concept1 car --concept2 boat --mode redact --embedder-model BAAI/EVA-CLIP-18B --output cars_vs_boats --comparison-images --comparison-n-tails 3 --blur 5 --dilate 25 --mode blackout --convex-hull --bins 100
+
+concept-resolution --folder1 data/dogs --folder2 data/cats --concept1 dog --concept2 cat --mode redact --embedder-model BAAI/EVA-CLIP-18B --output dogs_vs_cats --comparison-images --comparison-n-tails 3 --blur 5 --dilate 25 --mode blackout --convex-hull --bins 100
+
+concept-resolution --folder1 data/oranges --folder2 data/lemons --concept1 orange --concept2 lemon --mode redact --embedder-model BAAI/EVA-CLIP-18B --output oranges_vs_lemons --comparison-images --comparison-n-tails 3 --blur 5 --dilate 25 --mode blackout --bins 100
+
+#----- text
+
+concept-resolution --folder1 data/desks.txt --folder2 data/paperclips.txt --concept1 desk --concept2 paperclip --mode redact --embedder-model Qwen/Qwen3-Embedding-8B --output desks_vs_paperclips_text --text-embedder qwen --mode blackout --bins 100
+
+concept-resolution --folder1 data/cars.txt --folder2 data/boats.txt --concept1 car --concept2 boat --mode redact --embedder-model Qwen/Qwen3-Embedding-8B --output cars_vs_boats_text --text-embedder qwen --mode blackout --bins 100
+
+concept-resolution --folder1 data/dogs.txt --folder2 data/cats.txt --concept1 dog --concept2 cat --mode redact --embedder-model Qwen/Qwen3-Embedding-8B --output dogs_vs_cats_text --text-embedder qwen --mode blackout --bins 100
+
+concept-resolution --folder1 data/oranges.txt --folder2 data/lemons.txt --concept1 orange --concept2 lemon --mode redact --embedder-model Qwen/Qwen3-Embedding-8B --output oranges_vs_lemons_text --text-embedder qwen --mode blackout --bins 100
